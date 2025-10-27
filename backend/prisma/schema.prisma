@@ -1,0 +1,322 @@
+// PSYGStore Database Schema
+// MySQL with Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Users table
+model User {
+  id                    String   @id @default(cuid())
+  email                 String?  @unique
+  fullName              String   @map("full_name")
+  walletBalanceRial     BigInt   @default(0) @map("wallet_balance_rial")
+  walletBalanceCrypto   Decimal  @default(0) @map("wallet_balance_crypto") @db.Decimal(20, 8)
+  walletAddress         String?  @map("wallet_address")
+  authType              AuthType @default(EMAIL) @map("auth_type")
+  passwordHash          String?  @map("password_hash")
+  isAdmin               Boolean  @default(false) @map("is_admin")
+  isActive              Boolean  @default(true) @map("is_active")
+  emailVerified         Boolean  @default(false) @map("email_verified")
+  emailVerificationToken String? @map("email_verification_token")
+  passwordResetToken    String?  @map("password_reset_token")
+  passwordResetExpires  DateTime? @map("password_reset_expires")
+  twoFactorSecret       String?  @map("two_factor_secret")
+  twoFactorEnabled      Boolean  @default(false) @map("two_factor_enabled")
+  lastLoginAt           DateTime? @map("last_login_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  orders                Order[]
+  paymentRequests       PaymentRequest[]
+  cryptoPaymentRequests CryptoPaymentRequest[]
+  couponUsages          CouponUsage[]
+  adminLogs             AdminLog[]
+  createdCoupons        Coupon[] @relation("CouponCreator")
+  createdArticles       Article[] @relation("ArticleAuthor")
+  subscriptions         Subscription[]
+
+  @@map("users")
+  @@index([email])
+  @@index([walletAddress])
+  @@index([authType])
+  @@index([isAdmin])
+  @@index([createdAt])
+}
+
+enum AuthType {
+  EMAIL
+  WEB3
+
+  @@map("auth_type")
+}
+
+// Orders table
+model Order {
+  id           String      @id @default(cuid())
+  userId       String      @map("user_id")
+  productId    String      @map("product_id")
+  optionName   String      @map("option_name")
+  quantity     Int         @default(1)
+  totalPrice   BigInt      @map("total_price")
+  status       OrderStatus @default(PENDING)
+  telegramId   String?     @map("telegram_id")
+  notes        String?     @db.Text
+  adminNotes   String?     @map("admin_notes") @db.Text
+  couponId     String?     @map("coupon_id")
+  discountAmount BigInt?   @map("discount_amount")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coupon       Coupon?     @relation(fields: [couponId], references: [id])
+  couponUsages CouponUsage[]
+
+  @@map("orders")
+  @@index([userId])
+  @@index([productId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+
+  @@map("order_status")
+}
+
+// Articles table
+model Article {
+  id              String    @id @default(cuid())
+  title           String    @db.VarChar(500)
+  slug            String    @unique
+  excerpt         String?   @db.Text
+  content         String    @db.LongText
+  imageUrl        String?   @map("image_url") @db.VarChar(500)
+  category        String?   @db.VarChar(100)
+  readTime        Int?      @map("read_time")
+  keywords        Json?
+  metaDescription String?   @map("meta_description") @db.Text
+  isPublished     Boolean   @default(true) @map("is_published")
+  authorId        String?   @map("author_id")
+  publishedAt     DateTime  @default(now()) @map("published_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  author          User?     @relation("ArticleAuthor", fields: [authorId], references: [id])
+
+  @@map("articles")
+  @@index([slug])
+  @@index([category])
+  @@index([isPublished])
+  @@index([publishedAt])
+  @@fulltext([title, content])
+}
+
+// Payment Requests (ZarinPal)
+model PaymentRequest {
+  id          String        @id @default(cuid())
+  userId      String        @map("user_id")
+  authority   String        @unique
+  amount      BigInt
+  description String?       @db.Text
+  orderId     String?       @map("order_id")
+  status      PaymentStatus @default(PENDING)
+  refId       String?       @map("ref_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payment_requests")
+  @@index([userId])
+  @@index([authority])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+
+  @@map("payment_status")
+}
+
+// Crypto Payment Requests (Payment4)
+model CryptoPaymentRequest {
+  id              String            @id @default(cuid())
+  userId          String            @map("user_id")
+  paymentId       String            @unique @map("payment_id")
+  amount          Decimal           @db.Decimal(20, 8)
+  currency        String            @db.VarChar(10)
+  description     String?           @db.Text
+  orderId         String?           @map("order_id")
+  status          CryptoPaymentStatus @default(PENDING)
+  walletAddress   String            @map("wallet_address")
+  transactionHash String?           @map("transaction_hash")
+  exchangeRate    Decimal           @default(65000) @map("exchange_rate") @db.Decimal(15, 2)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  confirmedAt     DateTime?         @map("confirmed_at")
+
+  // Relations
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("crypto_payment_requests")
+  @@index([userId])
+  @@index([paymentId])
+  @@index([status])
+  @@index([currency])
+  @@index([createdAt])
+}
+
+enum CryptoPaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+
+  @@map("crypto_payment_status")
+}
+
+// Coupons table
+model Coupon {
+  id          String      @id @default(cuid())
+  code        String      @unique @db.VarChar(50)
+  type        CouponType
+  value       Decimal     @db.Decimal(10, 2)
+  minAmount   BigInt      @default(0) @map("min_amount")
+  maxDiscount BigInt?     @map("max_discount")
+  usageLimit  Int?        @map("usage_limit")
+  usedCount   Int         @default(0) @map("used_count")
+  validFrom   DateTime    @default(now()) @map("valid_from")
+  validUntil  DateTime?   @map("valid_until")
+  isActive    Boolean     @default(true) @map("is_active")
+  createdBy   String?     @map("created_by")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  creator     User?       @relation("CouponCreator", fields: [createdBy], references: [id])
+  orders      Order[]
+  usages      CouponUsage[]
+
+  @@map("coupons")
+  @@index([code])
+  @@index([isActive])
+  @@index([validUntil])
+  @@index([createdAt])
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+
+  @@map("coupon_type")
+}
+
+// Coupon Usage table
+model CouponUsage {
+  id             String   @id @default(cuid())
+  couponId       String   @map("coupon_id")
+  userId         String   @map("user_id")
+  orderId        String?  @map("order_id")
+  discountAmount BigInt   @map("discount_amount")
+  usedAt         DateTime @default(now()) @map("used_at")
+
+  // Relations
+  coupon         Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order          Order?   @relation(fields: [orderId], references: [id])
+
+  @@map("coupon_usage")
+  @@index([couponId])
+  @@index([userId])
+  @@index([orderId])
+  @@index([usedAt])
+}
+
+// Admin Logs table
+model AdminLog {
+  id         String   @id @default(cuid())
+  adminId    String   @map("admin_id")
+  action     String
+  targetType String?  @map("target_type") @db.VarChar(100)
+  targetId   String?  @map("target_id")
+  details    Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  admin      User     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("admin_logs")
+  @@index([adminId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// Crypto Prices table (for live price tracking)
+model CryptoPrice {
+  id        String   @id @default(cuid())
+  currency  String   @unique @db.VarChar(10)
+  priceIrt  Decimal  @map("price_irt") @db.Decimal(15, 2)
+  priceUsd  Decimal? @map("price_usd") @db.Decimal(10, 2)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("crypto_prices")
+  @@index([currency])
+  @@index([updatedAt])
+}
+
+// Price History table (for tracking price changes)
+model PriceHistory {
+  id        String   @id @default(cuid())
+  currency  String   @db.VarChar(10)
+  priceIrt  Decimal  @map("price_irt") @db.Decimal(15, 2)
+  priceUsd  Decimal? @map("price_usd") @db.Decimal(10, 2)
+  source    String   @default("nobitex") @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("price_history")
+  @@index([currency])
+  @@index([createdAt])
+}
+
+// Subscription table
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  type      String   @db.VarChar(50)
+  status    String   @db.VarChar(20)
+  startAt   DateTime @map("start_at")
+  endAt     DateTime @map("end_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+  @@index([userId])
+  @@index([status])
+  @@index([startAt])
+  @@index([endAt])
+}

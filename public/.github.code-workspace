@@ -1,0 +1,25 @@
+{
+	"folders": [
+		{
+			"path": "../../.github"
+		},
+		{
+			"path": "../../backend"
+		},
+		{
+			"path": "../../dist"
+		},
+		{
+			"path": "../../node_modules"
+		},
+		{
+			"path": "../../public"
+		},
+		{
+			"path": "../../scripts"
+		},
+		{
+			"path": "../../src"
+		}
+	]
+}

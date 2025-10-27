@@ -1,0 +1,49 @@
+# Multi-stage Dockerfile for PSYGStore
+
+# Stage 1: Build frontend assets
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Build backend
+FROM node:20-alpine AS backend-builder
+
+WORKDIR /app/backend
+
+COPY backend/package*.json ./
+RUN npm ci
+
+COPY backend/ ./
+RUN npm run build
+
+# Stage 3: Production image
+FROM node:20-alpine AS runtime
+
+ENV NODE_ENV=production
+WORKDIR /app
+
+# Install backend production dependencies
+COPY backend/package*.json ./backend/
+RUN cd backend   && npm ci --omit=dev
+
+# Copy compiled backend and frontend assets
+COPY --from=backend-builder /app/backend/dist ./backend/dist
+COPY --from=backend-builder /app/backend/prisma ./backend/prisma
+COPY --from=frontend-builder /app/dist ./backend/public
+
+# Use non-root user
+RUN addgroup -g 1001 -S nodejs   && adduser -S nodejs -u 1001 -G nodejs   && chown -R nodejs:nodejs /app
+USER nodejs
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/healthz', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+
+CMD ["node", "backend/dist/server.js"]

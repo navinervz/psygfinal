@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>آفلاین - فروشگاه سای جی</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Vazirmatn', system-ui, sans-serif;
+            background: linear-gradient(135deg, #000 0%, #1a1a1a 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 400px;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(20px);
+            border: 2px solid rgba(57, 255, 20, 0.3);
+            border-radius: 20px;
+            padding: 40px 30px;
+        }
+        
+        .icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            background: rgba(57, 255, 20, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+        }
+        
+        h1 {
+            color: #39ff14;
+            margin-bottom: 15px;
+            font-size: 24px;
+        }
+        
+        p {
+            color: #ccc;
+            line-height: 1.6;
+            margin-bottom: 25px;
+        }
+        
+        .retry-btn {
+            background: linear-gradient(45deg, #004d00, #39ff14);
+            color: black;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .retry-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(57, 255, 20, 0.3);
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon pulse">📡</div>
+        <h1>اتصال اینترنت قطع است</h1>
+        <p>
+            متأسفانه در حال حاضر اتصال اینترنت شما قطع است. 
+            لطفاً اتصال خود را بررسی کنید و مجدداً تلاش کنید.
+        </p>
+        <button class="retry-btn" onclick="window.location.reload()">
+            تلاش مجدد
+        </button>
+    </div>
+</body>
+</html>

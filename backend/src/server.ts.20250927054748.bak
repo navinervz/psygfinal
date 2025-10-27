@@ -1,0 +1,266 @@
+// backend/src/server.ts
+import express from 'express';
+import cors from 'cors';
+// import helmet from 'helmet'; // اگر خواستی اضافه کنی، فعالش کن
+import compression from 'compression';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
+import cron from 'node-cron';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
+import 'express-async-errors';
+
+import { config } from '@/config/environment';
+import { logger } from '@/utils/logger';
+import { errorHandler } from '@/middleware/errorHandler';
+import { requestLogger } from '@/middleware/requestLogger';
+import { securityHeaders } from '@/middleware/securityHeaders';
+import { prisma } from '@/config/database';
+
+// --- BigInt -> string برای خروجی JSON (جلوگیری از 500: Do not know how to serialize a BigInt)
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
+const app = express();
+
+// اگر بخواهی JSON خروجی حتی در آبجکت‌های تودرتو هم BigInt را تبدیل کند
+app.set('json replacer', (_key, value) => (typeof value === 'bigint' ? value.toString() : value));
+
+// Trust proxy برای رِیت‌لیمیت پشت رِورس‌پروکسی
+app.set('trust proxy', 1);
+
+// هدرهای امنیتی سفارشی
+app.use(securityHeaders);
+
+// (اختیاری) اگر خواستی helmet خام اضافه شود:
+// app.use(helmet());
+
+// CORS
+app.use(
+  cors({
+    origin: config.cors.origins,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+  })
+);
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.maxRequests,
+  message: {
+    error: 'Too many requests from this IP, please try again later.',
+    retryAfter: Math.ceil(config.rateLimit.windowMs / 1000),
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+
+// Body parsers
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    (req as any).rawBody = buf;
+  },
+}));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser(config.security.cookieSecret));
+
+// فشرده‌سازی
+app.use(compression());
+
+// لاگر ریکوئست‌ها
+app.use(requestLogger);
+
+// Swagger
+const swaggerOptions = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'PSYGStore API',
+      version: '1.0.0',
+      description: 'API documentation for PSYGStore backend',
+    },
+    servers: [
+      { url: config.app.baseUrl, description: 'App base URL' },
+      { url: 'http://127.0.0.1:3000', description: 'Local dev' },
+    ],
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      },
+      // ✅ اسکیماها و ریسپانس‌های از پیش‌تعریف‌شده
+      schemas: {
+        ErrorResponse: {
+          type: 'object',
+          properties: {
+            error: { type: 'string', example: 'Internal server error' },
+            statusCode: { type: 'integer', example: 500 },
+            timestamp: { type: 'string', format: 'date-time' },
+          },
+        },
+        User: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clxxx123' },
+            email: { type: 'string', format: 'email' },
+            fullName: { type: 'string' },
+            walletBalanceRial: { type: 'string', description: 'BigInt as string' },
+            walletBalanceCrypto: { type: 'string', description: 'Decimal as string' },
+            authType: { type: 'string', enum: ['EMAIL', 'GOOGLE', 'WALLET'] },
+            isAdmin: { type: 'boolean' },
+            isActive: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+          required: ['id', 'email', 'fullName', 'authType', 'isAdmin', 'isActive', 'createdAt'],
+        },
+        LoginResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', example: 'Login successful' },
+            user: { $ref: '#/components/schemas/User' },
+            accessToken: { type: 'string' },
+          },
+        },
+        RegisterResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', example: 'User registered successfully' },
+            user: { $ref: '#/components/schemas/User' },
+            accessToken: { type: 'string' },
+          },
+        },
+      },
+      responses: {
+        UnauthorizedError: {
+          description: 'Unauthorized',
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+          },
+        },
+        ValidationError: {
+          description: 'Validation error',
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+          },
+        },
+        RateLimitError: {
+          description: 'Too many requests',
+          headers: { 'Retry-After': { schema: { type: 'integer', example: 60 } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+          },
+        },
+      },
+    },
+  },
+  // مسیرها را بازتر گذاشتم تا پوشه‌های تو در تو هم اسکن شود
+  apis: ['./src/routes/**/*.ts', './src/controllers/**/*.ts'],
+};
+const specs = swaggerJsdoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+
+// Health check (روی هر دو مسیر برای راحتی توسعه)
+app.get(['/health', '/api/health', '/healthz'], async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: config.app.env,
+      version: process.env.npm_package_version || '1.0.0',
+      database: 'connected',
+      // اگر سرویس هنوز استارت نشده بود، هندل امن:
+      priceService: (priceUpdateService as any)?.getStatus?.() ?? 'unknown',
+    });
+  } catch (error) {
+    logger.error('Health check failed:', error);
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      error: 'Database connection failed',
+    });
+  }
+});
+
+// Routes
+import authRoutes from '@/routes/auth';
+import userRoutes from '@/routes/users';
+import orderRoutes from '@/routes/orders';
+import articleRoutes from '@/routes/articles';
+import paymentRoutes from '@/routes/payments';
+import walletRoutes from '@/routes/wallet';
+import couponRoutes from '@/routes/coupons';
+import priceRoutes from '@/routes/prices';
+import subscriptionRoutes from '@/routes/subscriptions';
+import adminRoutes from '@/routes/admin';
+
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/articles', articleRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/coupons', couponRoutes);
+app.use('/api/prices', priceRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/admin', adminRoutes);
+
+// 404
+app.use('*', (req, res) => {
+  res.status(404).json({
+    error: 'Endpoint not found',
+    path: req.originalUrl,
+    method: req.method,
+  });
+});
+
+// Errors
+app.use(errorHandler);
+
+// Services
+import { PriceUpdateService } from '@/services/PriceUpdateService';
+import { PriceCronService } from '@/services/PriceCronService';
+
+const priceUpdateService = new PriceUpdateService();
+const priceCronService = new PriceCronService();
+
+// Graceful shutdown
+async function shutdown(signal: 'SIGTERM' | 'SIGINT') {
+  logger.info(`${signal} received, shutting down gracefully`);
+  try {
+    priceUpdateService.stop();
+    priceCronService.stop();
+    await prisma.$disconnect();
+  } finally {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
+// Start
+const PORT = config.app.port;
+app.listen(PORT, () => {
+  logger.info(`🚀 PSYGStore Backend started on port ${PORT}`);
+  logger.info(`📊 Environment: ${config.app.env}`);
+  logger.info(`🗄️  Database: Connected to MySQL`);
+  logger.info(`📚 API Documentation: ${config.app.baseUrl}/api-docs`);
+
+  // Price services (در dev هم فعاله؛ اگر خواستی خاموش بشه بگو تا شرطش رو بذاریم)
+  priceUpdateService.start();
+  logger.info(`💰 Price update service started`);
+
+  priceCronService.start();
+  logger.info(`⏰ Price cron service started (every 5 minutes)`);
+});
+
+export default app;

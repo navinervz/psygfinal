@@ -1,0 +1,550 @@
+﻿import { Request, Response } from 'express';
+import crypto from 'crypto';
+import { prisma } from '@/config/database';
+import { AuthenticatedRequest } from '@/middleware/auth';
+import { logger, paymentLogger } from '@/utils/logger';
+import { AppError, ValidationError, PaymentError } from '@/utils/AppError';
+import { ZarinpalService } from '@/services/ZarinpalService';
+import { Payment4Service } from '@/services/Payment4Service';
+import { PriceUpdateService } from '@/services/PriceUpdateService';
+
+export class PaymentController {
+  private zarinpalService = new ZarinpalService();
+  private payment4Service = new Payment4Service();
+  private priceUpdateService = new PriceUpdateService();
+
+  /**
+   * Create ZarinPal payment request
+   */
+  public createZarinpalPayment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const userId = req.user!.id;
+    const { amount, description, orderId } = req.body;
+
+    // Validate amount
+    if (amount < 1000 || amount > 50000000) {
+      throw new ValidationError('Amount must be between 1,000 and 50,000,000 Toman');
+    }
+
+    try {
+      // Create payment request with ZarinPal
+      const paymentResult = await this.zarinpalService.createPayment(
+        amount,
+        description,
+        orderId
+      );
+
+      if (!paymentResult.success) {
+        throw new PaymentError('Failed to create payment request', paymentResult);
+      }
+
+      // Store payment request in database
+      const paymentRequest = await prisma.paymentRequest.create({
+        data: {
+          userId,
+          authority: paymentResult.authority!,
+          amount,
+          description,
+          orderId,
+          status: 'PENDING',
+        },
+      });
+
+      paymentLogger.info('ZarinPal payment request created', {
+        userId,
+        paymentId: paymentRequest.id,
+        authority: paymentResult.authority,
+        amount,
+        ip: req.ip,
+      });
+
+      res.json({
+        success: true,
+        paymentUrl: paymentResult.paymentUrl,
+        authority: paymentResult.authority,
+        amount,
+      });
+    } catch (error) {
+      paymentLogger.error('ZarinPal payment creation failed', {
+        userId,
+        amount,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ip: req.ip,
+      });
+      throw error;
+    }
+  };
+
+  /**
+   * Verify ZarinPal payment
+   */
+  public verifyZarinpalPayment = async (req: Request, res: Response): Promise<void> => {
+    const { Authority: authority, Status: status } = req.query;
+
+    if (!authority || typeof authority !== 'string') {
+      throw new ValidationError('Authority parameter is required');
+    }
+
+    // Get payment request from database
+    const paymentRequest = await prisma.paymentRequest.findUnique({
+      where: { authority },
+      include: { user: true },
+    });
+
+    if (!paymentRequest) {
+      throw new AppError('Payment request not found', 404);
+    }
+
+    if (status !== 'OK') {
+      // Update payment status to failed
+      await prisma.paymentRequest.update({
+        where: { authority },
+        data: { status: 'FAILED' },
+      });
+
+      paymentLogger.warn('ZarinPal payment failed', {
+        authority,
+        status,
+        userId: paymentRequest.userId,
+      });
+
+      res.json({
+        success: false,
+        message: 'Payment was cancelled or failed',
+      });
+      return;
+    }
+
+    try {
+      // Verify payment with ZarinPal
+      const verificationResult = await this.zarinpalService.verifyPayment(
+        authority,
+        Number(paymentRequest.amount)
+      );
+
+      if (verificationResult.success) {
+        // Update payment and user wallet in transaction
+        await prisma.$transaction(async (tx) => {
+          // Update payment status
+          await tx.paymentRequest.update({
+            where: { authority },
+            data: {
+              status: 'COMPLETED',
+              refId: verificationResult.refId,
+            },
+          });
+
+          // Add to user wallet
+          await tx.user.update({
+            where: { id: paymentRequest.userId },
+            data: {
+              walletBalanceRial: {
+                increment: Number(paymentRequest.amount),
+              },
+            },
+          });
+        });
+
+        paymentLogger.info('ZarinPal payment completed', {
+          authority,
+          refId: verificationResult.refId,
+          amount: Number(paymentRequest.amount),
+          userId: paymentRequest.userId,
+        });
+
+        res.json({
+          success: true,
+          message: 'Payment completed successfully',
+          refId: verificationResult.refId,
+          amount: Number(paymentRequest.amount),
+        });
+      } else {
+        // Update payment status to failed
+        await prisma.paymentRequest.update({
+          where: { authority },
+          data: { status: 'FAILED' },
+        });
+
+        paymentLogger.warn('ZarinPal payment verification failed', {
+          authority,
+          error: verificationResult.message,
+          userId: paymentRequest.userId,
+        });
+
+        res.json({
+          success: false,
+          message: verificationResult.message || 'Payment verification failed',
+        });
+      }
+    } catch (error) {
+      paymentLogger.error('ZarinPal verification error', {
+        authority,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        userId: paymentRequest.userId,
+      });
+      throw error;
+    }
+  };
+
+  /**
+   * ZarinPal callback handler
+   */
+  public zarinpalCallback = async (req: Request, res: Response): Promise<void> => {
+    const { Authority: authority, Status: status } = req.query;
+
+    // Redirect to frontend with payment result
+    const frontendUrl = `https://${process.env.DOMAIN}`;
+    
+    if (status === 'OK' && authority) {
+      res.redirect(`${frontendUrl}/payment/success?authority=${authority}`);
+    } else {
+      res.redirect(`${frontendUrl}/payment/failed?authority=${authority}`);
+    }
+  };
+
+  /**
+   * Create crypto payment request
+   */
+  public createCryptoPayment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const userId = req.user!.id;
+    const { amount, currency, description, orderId } = req.body;
+
+    // Validate currency
+    const validCurrencies = ['USDT', 'BTC', 'ETH', 'TON'];
+    if (!validCurrencies.includes(currency)) {
+      throw new ValidationError('Invalid currency');
+    }
+
+    // Get current exchange rate
+    const currentPrices = await this.priceUpdateService.getCurrentPrices();
+    const exchangeRate = currentPrices[currency as keyof typeof currentPrices];
+
+    if (!exchangeRate) {
+      throw new AppError('Exchange rate not available', 503);
+    }
+
+    try {
+      // Create payment with Payment4
+      const paymentResult = await this.payment4Service.createPayment(
+        amount,
+        currency,
+        description,
+        orderId,
+        userId
+      );
+
+      if (!paymentResult.success) {
+        throw new PaymentError('Failed to create crypto payment request', paymentResult);
+      }
+
+      // Store crypto payment request in database
+      const cryptoPaymentRequest = await prisma.cryptoPaymentRequest.create({
+        data: {
+          userId,
+          paymentId: paymentResult.paymentId!,
+          amount,
+          currency,
+          description,
+          orderId,
+          status: 'PENDING',
+          walletAddress: paymentResult.walletAddress!,
+          exchangeRate,
+        },
+      });
+
+      paymentLogger.info('Crypto payment request created', {
+        userId,
+        paymentId: paymentResult.paymentId,
+        amount,
+        currency,
+        exchangeRate,
+        ip: req.ip,
+      });
+
+      res.json({
+        success: true,
+        paymentId: paymentResult.paymentId,
+        paymentUrl: paymentResult.paymentUrl,
+        walletAddress: paymentResult.walletAddress,
+        amount,
+        currency,
+        exchangeRate,
+        tomanEquivalent: amount * exchangeRate,
+      });
+    } catch (error) {
+      paymentLogger.error('Crypto payment creation failed', {
+        userId,
+        amount,
+        currency,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ip: req.ip,
+      });
+      throw error;
+    }
+  };
+
+  /**
+   * Verify crypto payment
+   */
+  public verifyCryptoPayment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const { paymentId } = req.params;
+    const userId = req.user!.id;
+
+    // Get payment request from database
+    const paymentRequest = await prisma.cryptoPaymentRequest.findFirst({
+      where: {
+        paymentId,
+        userId,
+      },
+    });
+
+    if (!paymentRequest) {
+      throw new AppError('Payment request not found', 404);
+    }
+
+    try {
+      // Verify payment with Payment4
+      const verificationResult = await this.payment4Service.verifyPayment(paymentId);
+
+      if (verificationResult.success && verificationResult.status === 'completed') {
+        // Update payment and user wallet in transaction
+        await prisma.$transaction(async (tx) => {
+          // Update payment status
+          await tx.cryptoPaymentRequest.update({
+            where: { paymentId },
+            data: {
+              status: 'COMPLETED',
+              transactionHash: verificationResult.transactionHash,
+              confirmedAt: new Date(),
+            },
+          });
+
+          // Calculate Toman equivalent
+          const tomanAmount = Number(paymentRequest.amount) * Number(paymentRequest.exchangeRate);
+
+          // Add to user wallet
+          await tx.user.update({
+            where: { id: userId },
+            data: {
+              walletBalanceRial: {
+                increment: Math.floor(tomanAmount),
+              },
+            },
+          });
+        });
+
+        paymentLogger.info('Crypto payment completed', {
+          paymentId,
+          transactionHash: verificationResult.transactionHash,
+          amount: Number(paymentRequest.amount),
+          currency: paymentRequest.currency,
+          userId,
+        });
+
+        res.json({
+          success: true,
+          status: 'completed',
+          transactionHash: verificationResult.transactionHash,
+          amount: Number(paymentRequest.amount),
+          currency: paymentRequest.currency,
+          tomanEquivalent: Number(paymentRequest.amount) * Number(paymentRequest.exchangeRate),
+        });
+      } else {
+        res.json({
+          success: true,
+          status: verificationResult.status || 'pending',
+          message: this.getPaymentStatusMessage(verificationResult.status || 'pending'),
+        });
+      }
+    } catch (error) {
+      paymentLogger.error('Crypto payment verification failed', {
+        paymentId,
+        userId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      throw error;
+    }
+  };
+
+  /**
+   * Crypto payment callback handler
+   */
+  public cryptoCallback = async (req: Request, res: Response): Promise<void> => {
+    const { payment_id: paymentId, status, transaction_hash: transactionHash } = req.body;
+
+    if (!paymentId || !status) {
+      throw new ValidationError('Missing required fields');
+    }
+
+    // Verify webhook signature (MANDATORY)
+    const signature = req.headers['x-payment4-signature'] as string;
+    if (!signature) {
+      paymentLogger.warn('Missing Payment4 signature', { ip: req.ip });
+      res.sendStatus(401);
+      return;
+    }
+
+    const raw = (req as any).rawBody as Buffer;
+    if (!raw || raw.length === 0) {
+      paymentLogger.warn('Missing Payment4 raw payload', { ip: req.ip });
+      res.sendStatus(400);
+      return;
+    }
+
+    const expectedBuffer = crypto
+      .createHmac('sha256', process.env.PAYMENT4_WEBHOOK_SECRET!)
+      .update(raw)
+      .digest();
+
+    const normalizedSignature = signature.trim().toLowerCase().replace(/^0x/, '');
+
+    let providedBuffer: Buffer;
+    try {
+      providedBuffer = Buffer.from(normalizedSignature, 'hex');
+    } catch (error) {
+      paymentLogger.warn('Malformed Payment4 signature', { ip: req.ip });
+      res.sendStatus(401);
+      return;
+    }
+
+    if (providedBuffer.length === 0 || providedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+      paymentLogger.warn('Invalid Payment4 signature', { ip: req.ip });
+      res.sendStatus(401);
+      return;
+    }
+
+    try {
+      // Get payment request
+      const paymentRequest = await prisma.cryptoPaymentRequest.findUnique({
+        where: { paymentId },
+      });
+
+      if (!paymentRequest) {
+        throw new AppError('Payment request not found', 404);
+      }
+
+      // Update payment status
+      await prisma.cryptoPaymentRequest.update({
+        where: { paymentId },
+        data: {
+          status: status.toUpperCase(),
+          transactionHash,
+          ...(status === 'completed' && { confirmedAt: new Date() }),
+        },
+      });
+
+      // If payment completed, update user wallet
+      if (status === 'completed') {
+        const tomanAmount = Number(paymentRequest.amount) * Number(paymentRequest.exchangeRate);
+
+        await prisma.user.update({
+          where: { id: paymentRequest.userId },
+          data: {
+            walletBalanceRial: {
+              increment: Math.floor(tomanAmount),
+            },
+          },
+        });
+
+        paymentLogger.info('Crypto payment webhook processed', {
+          paymentId,
+          status,
+          transactionHash,
+          userId: paymentRequest.userId,
+          tomanAmount,
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      paymentLogger.error('Crypto payment webhook error', {
+        paymentId,
+        status,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ip: req.ip,
+      });
+      throw error;
+    }
+  };
+
+  /**
+   * Get current crypto prices
+   */
+  public getCurrentPrices = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const prices = await this.priceUpdateService.getCurrentPrices();
+      
+      res.json({
+        success: true,
+        prices,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error('Error getting current prices', error);
+      throw new AppError('Failed to get current prices', 503);
+    }
+  };
+
+  /**
+   * Get price history
+   */
+  public getPriceHistory = async (req: Request, res: Response): Promise<void> => {
+    const { currency } = req.params;
+    const { days = 7 } = req.query;
+
+    try {
+      const history = await this.priceUpdateService.getPriceHistory(
+        currency.toUpperCase(),
+        Number(days)
+      );
+
+      res.json({
+        success: true,
+        currency: currency.toUpperCase(),
+        history,
+        days: Number(days),
+      });
+    } catch (error) {
+      logger.error(`Error getting price history for ${currency}`, error);
+      throw new AppError('Failed to get price history', 503);
+    }
+  };
+
+  /**
+   * Get list of supported currencies from Payment4
+   */
+  public getSupportedCurrencies = async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await this.payment4Service.getSupportedCurrencies();
+      const currencies = Array.isArray(result.currencies) && result.currencies.length > 0
+        ? result.currencies
+        : [
+            { code: 'USDT', name: 'Tether', network: 'Ethereum' },
+            { code: 'BTC', name: 'Bitcoin', network: 'Bitcoin' },
+            { code: 'ETH', name: 'Ethereum', network: 'Ethereum' },
+            { code: 'TON', name: 'Toncoin', network: 'TON' },
+          ];
+
+      res.json({ success: true, currencies });
+    } catch (error) {
+      paymentLogger.error('Failed to fetch Payment4 supported currencies', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      res.status(503).json({ success: false, error: 'Unable to fetch supported currencies' });
+    }
+  };
+
+  /**
+   * Get payment status message
+   */
+  private getPaymentStatusMessage(status: string): string {
+    const messages: Record<string, string> = {
+      pending: 'Ø¯Ø± Ø§Ù†ØªØ¸Ø§Ø± Ù¾Ø±Ø¯Ø§Ø®Øª',
+      completed: 'Ù¾Ø±Ø¯Ø§Ø®Øª ØªÚ©Ù…ÛŒÙ„ Ø´Ø¯',
+      failed: 'Ù¾Ø±Ø¯Ø§Ø®Øª Ù†Ø§Ù…ÙˆÙÙ‚',
+      expired: 'Ù…Ù‡Ù„Øª Ù¾Ø±Ø¯Ø§Ø®Øª Ù…Ù†Ù‚Ø¶ÛŒ Ø´Ø¯',
+      cancelled: 'Ù¾Ø±Ø¯Ø§Ø®Øª Ù„ØºÙˆ Ø´Ø¯',
+    };
+
+    return messages[status] || 'ÙˆØ¶Ø¹ÛŒØª Ù†Ø§Ù…Ø´Ø®Øµ';
+  }
+}
