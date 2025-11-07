@@ -31,17 +31,13 @@ app.set('json replacer', (_key, value) =>
   typeof value === 'bigint' ? value.toString() : value
 );
 
-// trust proxy for real IPs if behind LB/reverse-proxy
+// trust proxy
 app.set('trust proxy', 1);
 
 // Security
 app.disable('x-powered-by');
 app.use(securityHeaders);
-app.use(
-  helmet({
-    contentSecurityPolicy: false, // allow swagger and local dev
-  })
-);
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // CORS
 app.use(
@@ -71,13 +67,30 @@ app.use(compression());
 // Request logs
 app.use(requestLogger);
 
-// Light health checks
-app.get('/', (_req, res) => {
-  res.status(200).json({ status: 'ok', time: new Date().toISOString() });
-});
+// ───────────── Health ─────────────
+// لایو: بدون وابستگی به DB → برای پاس‌شدن Healthcheck
+app.get('/', (_req, res) =>
+  res.status(200).json({ status: 'ok', time: new Date().toISOString() })
+);
+app.get('/health', (_req, res) => res.status(200).send('ok'));
+app.get('/healthz', (_req, res) => res.status(200).json({ status: 'ok' }));
 
-app.get('/healthz', (_req, res) => {
-  res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+// Readiness: وضعیت واقعی با چک DB و سرویس‌ها
+let servicesReady = false;
+app.get(['/ready', '/api/health'], async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: servicesReady ? 'ready' : 'starting',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: config.app.env,
+      version: process.env.npm_package_version || '1.0.0',
+    });
+  } catch (error) {
+    logger.error('Readiness check failed:', error as any);
+    res.status(503).json({ status: 'unhealthy', error: 'DB not ready' });
+  }
 });
 
 // Swagger
@@ -96,37 +109,6 @@ const swaggerOptions = {
     components: {
       securitySchemes: {
         bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-      },
-      schemas: {
-        ErrorResponse: {
-          type: 'object',
-          properties: {
-            error: { type: 'string', example: 'Internal server error' },
-            statusCode: { type: 'integer', example: 500 },
-            timestamp: { type: 'string', format: 'date-time' },
-          },
-        },
-      },
-      responses: {
-        UnauthorizedError: {
-          description: 'Unauthorized',
-          content: {
-            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
-          },
-        },
-        ValidationError: {
-          description: 'Validation error',
-          content: {
-            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
-          },
-        },
-        RateLimitError: {
-          description: 'Too many requests',
-          headers: { 'Retry-After': { schema: { type: 'integer', example: 60 } } },
-          content: {
-            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
-          },
-        },
       },
     },
   },
@@ -158,45 +140,16 @@ app.use('/api/prices', priceRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Advanced health with DB and services
-const priceUpdateService = new PriceUpdateService();
-const priceCronService = new PriceCronService();
-
-app.get(['/health', '/api/health'], async (_req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      environment: config.app.env,
-      version: process.env.npm_package_version || '1.0.0',
-      database: 'connected',
-      priceService: priceUpdateService.getStatus(),
-      cronService: priceCronService.getStatus(),
-    });
-  } catch (error) {
-    logger.error('Health check failed:', error as any);
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: 'Database connection failed',
-    });
-  }
-});
-
 // 404
 app.use(notFoundHandler);
 
-// Errors (last)
+// Errors
 app.use(errorHandler);
 
 // Graceful shutdown
 async function shutdown(signal: 'SIGTERM' | 'SIGINT') {
   logger.info(`${signal} received, shutting down gracefully`);
   try {
-    priceUpdateService.stop();
-    priceCronService.stop();
     await disconnectDatabase();
   } finally {
     process.exit(0);
@@ -212,30 +165,29 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-// Start
-// مهم: روی PORT تزریق‌شده و 0.0.0.0 گوش بده تا Railway هِلث‌چک پاس شود.
+// ───────────── Start ─────────────
+// اول لیسن. سپس اتصال DB و سرویس‌ها به‌صورت پس‌زمینه.
 const PORT = Number(process.env.PORT) || Number(config.app.port) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
-async function start() {
-  await connectDatabase();
-
-  priceUpdateService.start();
-  logger.info('💰 Price update service started');
-
-  priceCronService.start();
-  logger.info('⏰ Price cron service started');
-
-  app.listen(PORT, HOST, () => {
-    logger.info(`🚀 PSYGStore Backend started on http://${HOST}:${PORT}`);
-    logger.info(`📊 Environment: ${config.app.env}`);
-    logger.info(`📚 API Documentation: ${config.app.baseUrl}/api-docs`);
-  });
-}
-
-start().catch((err) => {
-  logger.error('Server start failed:', err);
-  process.exit(1);
+app.listen(PORT, HOST, () => {
+  logger.info(`🚀 PSYGStore Backend listening on http://${HOST}:${PORT}`);
+  logger.info(`📊 Environment: ${config.app.env}`);
+  logger.info(`📚 API Documentation: ${config.app.baseUrl}/api-docs`);
 });
+
+(async () => {
+  try {
+    await connectDatabase();
+    const priceUpdateService = new PriceUpdateService();
+    const priceCronService = new PriceCronService();
+    priceUpdateService.start();
+    priceCronService.start();
+    servicesReady = true;
+    logger.info('✅ DB connected and services started');
+  } catch (err) {
+    logger.error('❌ Background init failed:', err);
+  }
+})();
 
 export default app;
