@@ -19,26 +19,27 @@ import { prisma, connectDatabase, disconnectDatabase } from '@/config/database';
 import { PriceUpdateService } from '@/services/PriceUpdateService';
 import { PriceCronService } from '@/services/PriceCronService';
 
-// --- BigInt -> string برای خروجی JSON
+// Ensure BigInt -> string in JSON
 (BigInt.prototype as any).toJSON = function () {
   return this.toString();
 };
 
 const app = express();
 
-// تبدیل BigInt در تمام پاسخ‌های JSON
-app.set('json replacer', (_key, value) => (typeof value === 'bigint' ? value.toString() : value));
+// JSON replacer for BigInt
+app.set('json replacer', (_key, value) =>
+  typeof value === 'bigint' ? value.toString() : value
+);
 
-// پشت پروکسی (برای نرخ‌دهی و IP واقعی)
+// trust proxy for real IPs if behind LB/reverse-proxy
 app.set('trust proxy', 1);
 
-// امنیت پایه
+// Security
 app.disable('x-powered-by');
 app.use(securityHeaders);
 app.use(
   helmet({
-    // برخی گزینه‌ها در نسخه‌های جدید خودکار هستند؛ CSP را دستی غیرفعال می‌کنیم تا Swagger و فرانت محلی راحت باشند
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: false, // allow swagger and local dev
   })
 );
 
@@ -64,13 +65,13 @@ app.use(
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser(config.security.cookieSecret));
 
-// فشرده‌سازی
+// Compression
 app.use(compression());
 
-// لاگ ریکوئست‌ها
+// Request logs
 app.use(requestLogger);
 
-// --- Health endpoints سبک (برای Docker و LB)
+// Light health checks
 app.get('/', (_req, res) => {
   res.status(200).json({ status: 'ok', time: new Date().toISOString() });
 });
@@ -79,13 +80,13 @@ app.get('/healthz', (_req, res) => {
   res.status(200).json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// --- Swagger
+// Swagger
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
       title: 'PSYGStore API',
-      version: '1.0.0',
+      version: process.env.npm_package_version || '1.0.0',
       description: 'API documentation for PSYGStore backend',
     },
     servers: [
@@ -109,26 +110,32 @@ const swaggerOptions = {
       responses: {
         UnauthorizedError: {
           description: 'Unauthorized',
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+          },
         },
         ValidationError: {
           description: 'Validation error',
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+          },
         },
         RateLimitError: {
           description: 'Too many requests',
           headers: { 'Retry-After': { schema: { type: 'integer', example: 60 } } },
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+          },
         },
       },
     },
   },
   apis: ['./src/routes/**/*.ts', './src/controllers/**/*.ts'],
 };
-const specs = swaggerJsdoc(swaggerOptions);
+const specs = swaggerJsdoc(swaggerOptions as any);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
-// --- Routes
+// Routes
 import authRoutes from '@/routes/auth';
 import userRoutes from '@/routes/users';
 import orderRoutes from '@/routes/orders';
@@ -151,7 +158,7 @@ app.use('/api/prices', priceRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
 
-// --- Health پیشرفته با چک دیتابیس و سرویس‌ها
+// Advanced health with DB and services
 const priceUpdateService = new PriceUpdateService();
 const priceCronService = new PriceCronService();
 
@@ -165,8 +172,8 @@ app.get(['/health', '/api/health'], async (_req, res) => {
       environment: config.app.env,
       version: process.env.npm_package_version || '1.0.0',
       database: 'connected',
-      priceService: priceUpdateService?.getStatus?.() ?? 'unknown',
-      cronService: priceCronService?.getStatus?.() ?? 'unknown',
+      priceService: priceUpdateService.getStatus(),
+      cronService: priceCronService.getStatus(),
     });
   } catch (error) {
     logger.error('Health check failed:', error as any);
@@ -181,15 +188,15 @@ app.get(['/health', '/api/health'], async (_req, res) => {
 // 404
 app.use(notFoundHandler);
 
-// Errors (باید آخر از همه بیاد)
+// Errors (last)
 app.use(errorHandler);
 
 // Graceful shutdown
 async function shutdown(signal: 'SIGTERM' | 'SIGINT') {
   logger.info(`${signal} received, shutting down gracefully`);
   try {
-    priceUpdateService.stop?.();
-    priceCronService.stop?.();
+    priceUpdateService.stop();
+    priceCronService.stop();
     await disconnectDatabase();
   } finally {
     process.exit(0);
@@ -206,22 +213,21 @@ process.on('uncaughtException', (err) => {
 });
 
 // Start
-const PORT = config.app.port;
+// مهم: روی PORT تزریق‌شده و 0.0.0.0 گوش بده تا Railway هِلث‌چک پاس شود.
+const PORT = Number(process.env.PORT) || Number(config.app.port) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 async function start() {
-  // ابتدا دیتابیس
   await connectDatabase();
 
-  // سپس سرویس‌ها
-  priceUpdateService.start?.();
-  logger.info(`💰 Price update service started`);
+  priceUpdateService.start();
+  logger.info('💰 Price update service started');
 
-  priceCronService.start?.();
-  logger.info(`⏰ Price cron service started`);
+  priceCronService.start();
+  logger.info('⏰ Price cron service started');
 
-  // بعد سرور
-  app.listen(PORT, () => {
-    logger.info(`🚀 PSYGStore Backend started on port ${PORT}`);
+  app.listen(PORT, HOST, () => {
+    logger.info(`🚀 PSYGStore Backend started on http://${HOST}:${PORT}`);
     logger.info(`📊 Environment: ${config.app.env}`);
     logger.info(`📚 API Documentation: ${config.app.baseUrl}/api-docs`);
   });
