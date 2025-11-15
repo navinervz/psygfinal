@@ -261,7 +261,7 @@ model AdminLog {
   targetType String?  @map("target_type") @db.VarChar(100)
   targetId   String?  @map("target_id")
   details    Json?
-  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+ ip String? @map("ip") @db.VarChar(45)
   userAgent  String?  @map("user_agent") @db.Text
   createdAt  DateTime @default(now()) @map("created_at")
 
