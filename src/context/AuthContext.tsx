@@ -200,10 +200,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshProfile: async () => {
       await loadProfile();
     },
-    topUpWallet: async () => {
-      await loadProfile();
-    },
-  }), [user, loading, signIn, signUp, signInWithWallet, signOut, updateProfile, loadProfile]);
+topUpWallet: async (amount: number, method: 'rial' | 'crypto') => {
+    try {
+      const response = await api.post('/wallet/topup', { amount, method });
+      if (response.data?.success) {
+        await loadProfile();
+        showSuccess('موجودی به‌روز شد', 'شارژ کیف پول با موفقیت انجام شد.');
+      }
+    } catch (error: any) {
+      console.error('Wallet topup failed', error);
+      showError('خرابی در شارژ', error?.response?.data?.error || 'لطفاً دوباره تلاش کنید.');
+      throw error;
+    }
+  },  }), [user, loading, signIn, signUp, signInWithWallet, signOut, updateProfile, loadProfile]);
 
   return (
     <AuthContext.Provider value={contextValue}>
