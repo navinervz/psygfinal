@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: psyg_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: psyg_store
+      MYSQL_USER: psyg_user
+      MYSQL_PASSWORD: psyg_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 5
+    networks:
+      - psyg_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: psyg_backend
+    restart: always
+    environment:
+      DATABASE_URL: "mysql://psyg_user:psyg_password@mysql:3306/psyg_store"
+      NODE_ENV: development
+      PORT: 3000
+      CORS_ORIGIN: "http://localhost:5173"
+      JWT_SECRET: "dev-secret-key-change-in-production"
+    ports:
+      - "3000:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - psyg_network
+    command: npm run dev
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  psyg_network:
+    driver: bridge
