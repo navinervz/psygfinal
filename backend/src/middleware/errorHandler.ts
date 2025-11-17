@@ -194,15 +194,18 @@ export const errorHandler = (error: any, req: Request, res: Response, _next: Nex
 
   // هدرهای خاص
   if (statusCode === 429) {
+    const retryAfter =
+      (error?.retryAfter && !Number.isNaN(Number(error.retryAfter)))
+        ? Number(error.retryAfter)
+        : 60;
 
-          const retryAfter = (error?.retryAfter && Number(error.retryAfter)) || 60;
-      res.setHeader('Retry-After', String(retryAfter));
-    }
+    res.setHeader('Retry-After', String(retryAfter));
   }
 
   if (res.headersSent) return;
   res.status(statusCode).json(errorResponse);
 };
+
 
 /* --------------------------------- 404 ---------------------------------- */
 
