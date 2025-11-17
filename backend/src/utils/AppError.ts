@@ -4,7 +4,8 @@
  * Base application error with HTTP semantics and safe extras.
  */
 export class AppError extends Error {
-  public readonly name = 'AppError';
+  // name دیگر readonly نیست تا بتوانیم در کلاس پایه آن را تنظیم کنیم
+  public name: string;
   public readonly statusCode: number;
   public readonly isOperational: boolean;
   public readonly details?: unknown;
@@ -20,8 +21,12 @@ export class AppError extends Error {
     cause?: unknown
   ) {
     super(message);
+
     // Fix prototype chain for TS -> JS transpilation so `instanceof` works
     Object.setPrototypeOf(this, new.target.prototype);
+
+    // به صورت خودکار نام کلاس را روی name می‌گذاریم
+    this.name = new.target.name || 'AppError';
 
     this.statusCode = statusCode;
     this.isOperational = isOperational;
@@ -51,7 +56,7 @@ export class AppError extends Error {
 
   /** Type guard */
   static isAppError(err: unknown): err is AppError {
-    return !!err && typeof err === 'object' && (err as any).name === 'AppError';
+    return err instanceof AppError;
   }
 
   /** Normalize unknown errors to AppError */
@@ -68,7 +73,7 @@ export class AppError extends Error {
 export class ValidationError extends AppError {
   constructor(message: string = 'Validation failed', details?: unknown, code = 'VALIDATION_ERROR') {
     super(message, 400, true, details, code);
-    this.name = 'ValidationError';
+    // this.name را دیگر دستکاری نمی‌کنیم؛ خود کلاس پایه آن را برابر ValidationError می‌گذارد
   }
 }
 
@@ -76,7 +81,6 @@ export class ValidationError extends AppError {
 export class AuthenticationError extends AppError {
   constructor(message: string = 'Authentication required', code = 'AUTH_REQUIRED') {
     super(message, 401, true, undefined, code);
-    this.name = 'AuthenticationError';
   }
 }
 
@@ -84,7 +88,6 @@ export class AuthenticationError extends AppError {
 export class AuthorizationError extends AppError {
   constructor(message: string = 'Insufficient permissions', code = 'FORBIDDEN') {
     super(message, 403, true, undefined, code);
-    this.name = 'AuthorizationError';
   }
 }
 
@@ -92,7 +95,6 @@ export class AuthorizationError extends AppError {
 export class NotFoundError extends AppError {
   constructor(message: string = 'Resource not found', details?: unknown, code = 'NOT_FOUND') {
     super(message, 404, true, details, code);
-    this.name = 'NotFoundError';
   }
 }
 
@@ -100,7 +102,6 @@ export class NotFoundError extends AppError {
 export class ConflictError extends AppError {
   constructor(message: string = 'Resource already exists', details?: unknown, code = 'CONFLICT') {
     super(message, 409, true, details, code);
-    this.name = 'ConflictError';
   }
 }
 
@@ -108,7 +109,6 @@ export class ConflictError extends AppError {
 export class PaymentError extends AppError {
   constructor(message: string = 'Payment error', details?: unknown, code = 'PAYMENT_ERROR', statusCode = 400) {
     super(message, statusCode, true, details, code);
-    this.name = 'PaymentError';
   }
 }
 
@@ -116,6 +116,5 @@ export class PaymentError extends AppError {
 export class ExternalServiceError extends AppError {
   constructor(service: string, message: string, details?: unknown, code = 'UPSTREAM_ERROR') {
     super(`${service} service error: ${message}`, 502, true, details, code);
-    this.name = 'ExternalServiceError';
   }
 }
