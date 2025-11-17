@@ -62,16 +62,19 @@ export class AuthController {
       },
     });
 
-    // Generate tokens
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    // Generate tokens (cast to any چون Prisma.User کامل رو می‌خواد)
+    const accessToken = generateAccessToken(user as any);
+    const refreshToken = generateRefreshToken(user as any);
 
     // Set refresh token as httpOnly cookie
     res.cookie('refreshToken', refreshToken, refreshCookieOptions);
 
     // (اختیاری) ایمیل خوشامدگویی — خطاهای ایمیل نباید ثبت‌نام را خراب کنند
     try {
-      await this.emailService.sendWelcome?.(user.email!, user.fullName);
+      const svc = this.emailService as any;
+      if (typeof svc.sendWelcome === 'function') {
+        await svc.sendWelcome(user.email, user.fullName);
+      }
     } catch (e) {
       logger.warn('Welcome email failed', { email: user.email, error: (e as any)?.message });
     }
@@ -126,7 +129,12 @@ export class AuthController {
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
-      securityLogger.warn('Login attempt with invalid password', { userId: user.id, email, ip: req.ip, ua: req.get('User-Agent') });
+      securityLogger.warn('Login attempt with invalid password', {
+        userId: user.id,
+        email,
+        ip: req.ip,
+        ua: req.get('User-Agent'),
+      });
       throw new AuthenticationError('Invalid credentials');
     }
 
@@ -154,8 +162,8 @@ export class AuthController {
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
     // Generate tokens
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const accessToken = generateAccessToken(user as any);
+    const refreshToken = generateRefreshToken(user as any);
 
     // Set refresh token as httpOnly cookie
     res.cookie('refreshToken', refreshToken, refreshCookieOptions);
@@ -190,7 +198,7 @@ export class AuthController {
     }
 
     // Find or create user
-    let user = await prisma.user.findUnique({
+    let user = await prisma.user.findFirst({
       where: { walletAddress },
       select: {
         id: true,
@@ -236,8 +244,8 @@ export class AuthController {
     }
 
     // Generate tokens
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const accessToken = generateAccessToken(user as any);
+    const refreshToken = generateRefreshToken(user as any);
 
     // Set refresh token as httpOnly cookie
     res.cookie('refreshToken', refreshToken, refreshCookieOptions);
@@ -274,8 +282,8 @@ export class AuthController {
       if (!user || !user.isActive) throw new AuthenticationError('User not found or inactive');
 
       // Generate new tokens (rotate refresh)
-      const newAccessToken = generateAccessToken(user);
-      const newRefreshToken = generateRefreshToken(user);
+      const newAccessToken = generateAccessToken(user as any);
+      const newRefreshToken = generateRefreshToken(user as any);
 
       res.cookie('refreshToken', newRefreshToken, refreshCookieOptions);
 
@@ -465,7 +473,7 @@ export class AuthController {
     if (!userId) throw new AuthenticationError();
 
     const currentPassword = String(req.body.currentPassword || '');
-    const newPassword = String(req.body.newPassword || '');
+       const newPassword = String(req.body.newPassword || '');
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -478,7 +486,10 @@ export class AuthController {
 
     const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!isCurrentPasswordValid) {
-      securityLogger.warn('Invalid current password in change password attempt', { userId, ip: (req as any).ip });
+      securityLogger.warn('Invalid current password in change password attempt', {
+        userId,
+        ip: (req as any).ip,
+      });
       throw new AuthenticationError('Current password is incorrect');
     }
 

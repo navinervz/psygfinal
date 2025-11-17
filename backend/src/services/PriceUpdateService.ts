@@ -206,27 +206,28 @@ export class PriceUpdateService {
     }
 
     try {
-      const apiCall = async () => {
+      this.inFlight = (async () => {
         this.updating = true;
-        const prices = await this.fetchFromNobitex();
-        await this.savePricesToDatabase(prices);
-        this.setCache(prices);
+        try {
+          const prices = await this.fetchFromNobitex();
+          await this.savePricesToDatabase(prices);
+          this.setCache(prices);
 
-        this.lastUpdate = new Date();
-        this.failureCount = 0;
+          this.lastUpdate = new Date();
+          this.failureCount = 0;
 
-        logger.info('✅ Price update completed successfully', {
-          prices,
-          timestamp: this.lastUpdate,
-        });
-      };
+          logger.info('✅ Price update completed successfully', {
+            prices,
+            timestamp: this.lastUpdate,
+          });
 
-      this.inFlight = apiCall()
-        .catch((e) => { throw e; })
-        .finally(() => {
+          // مهم: اینجا حتماً prices را برمی‌گردانیم تا نوع Promise<Required<CryptoPrices>> باشد
+          return prices;
+        } finally {
           this.updating = false;
           this.inFlight = undefined;
-        });
+        }
+      })();
 
       await this.inFlight;
     } catch (error: any) {
