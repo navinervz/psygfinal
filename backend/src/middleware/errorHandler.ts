@@ -1,3 +1,4 @@
+198
 // backend/src/middleware/errorHandler.ts
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
@@ -193,10 +194,8 @@ export const errorHandler = (error: any, req: Request, res: Response, _next: Nex
 
   // هدرهای خاص
   if (statusCode === 429) {
-    const retryAfter =
-      (error?.retryAfter && Number(error.retryAfter)) ||
-      Number(config.rateLimit?.retryAfterSeconds ?? 60);
-    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+
+          const retryAfter = (error?.retryAfter && Number(error.retryAfter)) || 60;
       res.setHeader('Retry-After', String(retryAfter));
     }
   }
