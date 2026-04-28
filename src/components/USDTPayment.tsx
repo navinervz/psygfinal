@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { DollarSign, Send, AlertTriangle, CheckCircle, ExternalLink } from 'lucide-react';
 import { useUSDTPayment } from '../hooks/useUSDTPayment';
 import { useWeb3Auth } from '../hooks/useWeb3Auth';

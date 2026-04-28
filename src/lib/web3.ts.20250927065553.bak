@@ -1,4 +1,4 @@
-﻿// src/lib/web3.ts
+// src/lib/web3.ts
 import { createConfig, http } from 'wagmi';
 import { mainnet, sepolia } from 'wagmi/chains';
 import { metaMask, walletConnect } from 'wagmi/connectors';

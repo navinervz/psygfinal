@@ -1,4 +1,4 @@
-﻿// backend/src/controllers/PaymentController.ts
+// backend/src/controllers/PaymentController.ts
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '@/config/database';

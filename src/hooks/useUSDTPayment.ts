@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { USDT_CONTRACT_ADDRESS, USDT_ABI, STORE_WALLET_ADDRESS, parseUSDT } from '../lib/web3';
 import { useNotificationContext } from '../context/NotificationContext';

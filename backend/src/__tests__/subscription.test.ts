@@ -1,4 +1,4 @@
-﻿import { Request, Response } from 'express';
+import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { SubscriptionController } from '../controllers/SubscriptionController';
 import { prisma } from '../config/database';

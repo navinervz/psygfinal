@@ -1,4 +1,4 @@
-﻿# --- Build backend ---
+# --- Build backend ---
 FROM node:20-alpine AS backend-build
 WORKDIR /app/backend
 

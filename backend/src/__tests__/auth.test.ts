@@ -1,4 +1,4 @@
-﻿import request from 'supertest';
+import request from 'supertest';
 import bcrypt from 'bcryptjs';
 import app from '../server';
 import { prisma } from './setup';

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { Wallet, CreditCard, Smartphone, CheckCircle, AlertTriangle, User, Mail, MessageSquare, Shield, Clock, Package, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useShoppingCart } from '../context/ShoppingCartContext';

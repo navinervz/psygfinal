@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Wallet, ExternalLink, RefreshCw, LogOut, Copy, Check, AlertTriangle } from 'lucide-react';
 import { useWeb3Auth } from '../hooks/useWeb3Auth';
 import { useNotificationContext } from '../context/NotificationContext';

@@ -1,4 +1,4 @@
-﻿// backend/src/middleware/securityHeaders.ts
+// backend/src/middleware/securityHeaders.ts
 import type { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import { config } from '@/config/environment';

@@ -1,4 +1,4 @@
-﻿import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { execSync } from 'child_process';
 import { join } from 'path';
 

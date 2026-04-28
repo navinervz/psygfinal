@@ -1,4 +1,4 @@
-﻿// backend/src/routes/payments.ts
+// backend/src/routes/payments.ts
 import { Router } from 'express';
 import Joi from 'joi';
 import { PaymentController } from '@/controllers/PaymentController';

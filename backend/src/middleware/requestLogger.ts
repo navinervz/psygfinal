@@ -1,4 +1,4 @@
-﻿// backend/src/middleware/requestLogger.ts
+// backend/src/middleware/requestLogger.ts
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
 import { logger } from '@/utils/logger';

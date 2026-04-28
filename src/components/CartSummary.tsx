@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { ShoppingCart, Wallet, CreditCard, Zap } from 'lucide-react';
 import { useShoppingCart } from '../context/ShoppingCartContext';
 import { useAuth } from '../context/AuthContext';

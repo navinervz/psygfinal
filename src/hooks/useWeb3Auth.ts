@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAccount, useConnect, useDisconnect, useBalance } from 'wagmi';
 import { readContract } from '@wagmi/core';
 import { wagmiConfig, USDT_CONTRACT_ADDRESS, USDT_ABI, formatUSDT } from '../lib/web3';

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { CreditCard, Send, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useNotificationContext } from '../context/NotificationContext';
 
